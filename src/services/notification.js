@@ -58,7 +58,8 @@ export async function checkOfflineNodes(db, sys) {
     const now = Date.now();
 
     for (const s of allServers) {
-      const diff = now - s.last_updated;
+      const lastUpdated = new Date(s.last_updated).getTime();
+      const diff = now - lastUpdated;
       const isOffline = diff > 300000;
 
       if (isOffline && !alertState[s.id]) {

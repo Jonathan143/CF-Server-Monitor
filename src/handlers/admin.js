@@ -137,7 +137,8 @@ export async function handleAdminAPI(request, env, sys) {
       };
       
       servers.forEach(s => {
-        if ((now - s.last_updated) < 30000) {
+        const lastUpdated = new Date(s.last_updated).getTime();
+        if ((now - lastUpdated) < 30000) {
           stats.online++;
           stats.total_cpu += parseFloat(s.cpu) || 0;
           stats.total_ram += parseFloat(s.ram) || 0;

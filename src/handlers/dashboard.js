@@ -41,7 +41,8 @@ export async function handleDashboard(request, env, sys) {
 
   if (results && results.length > 0) {
     for (const server of results) {
-      const isOnline = (now - server.last_updated) < 120000;
+      const lastUpdated = new Date(server.last_updated).getTime();
+      const isOnline = (now - lastUpdated) < 120000;
       
       if (isOnline) {
         globalOnline++;
@@ -99,7 +100,8 @@ export async function handleDashboard(request, env, sys) {
         <div class="servers-grid">`;
       
       for (const server of grpServers) {
-        const isOnline = (now - server.last_updated) < 120000;
+        const lastUpdated = new Date(server.last_updated).getTime();
+        const isOnline = (now - lastUpdated) < 120000;
         const statusColor = isOnline ? 'var(--accent-green)' : 'var(--accent-red)';
         const statusText = isOnline ? 'ONLINE' : 'OFFLINE';
         
@@ -231,7 +233,7 @@ export async function handleDashboard(request, env, sys) {
             </td>
             <td>${netInSpeed}/s</td>
             <td>${netOutSpeed}/s</td>
-            <td class="update-time">${Math.round((now - server.last_updated)/1000)}s ago</td>
+            <td class="update-time">${Math.round((now - lastUpdated)/1000)}s ago</td>
           </tr>`;
       }
       cardContentHtml += `</div></div>`;

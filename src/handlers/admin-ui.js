@@ -21,7 +21,8 @@ export async function handleAdminUI(request, env, sys) {
   let trs = '';
   if (results && results.length > 0) {
     for (const s of results) {
-      const isOnline = (now - s.last_updated) < 30000;
+      const lastUpdated = new Date(s.last_updated).getTime();
+      const isOnline = (now - lastUpdated) < 30000;
       const status = isOnline 
         ? '<span style="color:var(--accent-green); font-weight:bold;">● ONLINE</span>' 
         : '<span style="color:var(--accent-red); font-weight:bold;">● OFFLINE</span>';
