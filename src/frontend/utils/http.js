@@ -164,6 +164,28 @@ export const http = {
     return settled.map((r, i) => r.status === 'fulfilled' ? r.value : { error: r.reason?.message || 'Request failed', status: 0, baseUrl: bases[i] })
   },
 
+  async getAllWithProgress(url, onResult, options = {}) {
+    const bases = getApiBases()
+    if (bases.length === 0) {
+      const result = await this.get(url, options)
+      onResult({ ...result, baseUrl: getApiBases()[0] })
+      return
+    }
+
+    const promises = bases.map(baseUrl =>
+      fetchWithBase(baseUrl, url, options, 'GET', null)
+        .then(result => {
+          onResult({ ...result, baseUrl })
+        })
+        .catch(e => {
+          const isCors = /failed to fetch|networkerror|cors/i.test(e.message)
+          onResult({ error: e.message, status: 0, baseUrl, corsError: isCors })
+        })
+    )
+
+    await Promise.allSettled(promises)
+  },
+
   async postAll(url, body = {}, options = {}) {
     const bases = getApiBases()
     if (bases.length === 0) {

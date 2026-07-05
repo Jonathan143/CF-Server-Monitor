@@ -251,60 +251,88 @@ export const fetchServersAll = async () => {
   const localTitle = getTitle() || DEFAULT_SITE_TITLE
   const localBg = getBackgroundImage()
 
-  const mergedData = {
-    servers: [],
-    stats: { total: 0, online: 0, offline: 0, globalNetRx: 0, globalNetTx: 0, globalSpeedIn: 0, globalSpeedOut: 0 },
-    regionStats: {},
-    sysConfig: {
-      show_price: true,
-      show_expire: true,
-      show_bw: true,
-      show_tf: true,
-      show_time: true,
-      site_title: multiSite ? localTitle : DEFAULT_SITE_TITLE,
-      backgroundImage: multiSite ? localBg : ''
+  const mergedData = createEmptyMergedData()
+  mergedData.sysConfig.site_title = multiSite ? localTitle : DEFAULT_SITE_TITLE
+  mergedData.sysConfig.backgroundImage = multiSite ? localBg : ''
+
+  for (const result of results) {
+    mergeSiteResult(mergedData, result, multiSite, localTitle, localBg)
+  }
+
+  return mergedData
+}
+
+const createEmptyMergedData = () => ({
+  servers: [],
+  stats: { total: 0, online: 0, offline: 0, globalNetRx: 0, globalNetTx: 0, globalSpeedIn: 0, globalSpeedOut: 0 },
+  regionStats: {},
+  sysConfig: {
+    show_price: true,
+    show_expire: true,
+    show_bw: true,
+    show_tf: true,
+    show_time: true,
+    site_title: DEFAULT_SITE_TITLE,
+    backgroundImage: ''
+  }
+})
+
+const mergeSiteResult = (mergedData, { data, error, baseUrl }, multiSite, localTitle, localBg) => {
+  if (error || !data) return
+
+  const rawServers = Array.isArray(data.servers)
+    ? data.servers
+    : Object.entries(data.latestMetricsMap || {}).map(([id, metrics]) => ({ id, ...metrics }))
+
+  for (const server of rawServers) {
+    mergedData.servers.push({ ...server, source: baseUrl })
+  }
+
+  if (data.stats) {
+    mergedData.stats.total += data.stats.total || 0
+    mergedData.stats.online += data.stats.online || 0
+    mergedData.stats.offline += data.stats.offline || 0
+    mergedData.stats.globalNetRx += data.stats.globalNetRx || 0
+    mergedData.stats.globalNetTx += data.stats.globalNetTx || 0
+    mergedData.stats.globalSpeedIn += data.stats.globalSpeedIn || 0
+    mergedData.stats.globalSpeedOut += data.stats.globalSpeedOut || 0
+  }
+
+  if (data.regionStats) {
+    for (const code in data.regionStats) {
+      mergedData.regionStats[code] = (mergedData.regionStats[code] || 0) + data.regionStats[code]
     }
   }
 
-  for (const { data, error, baseUrl } of results) {
-    if (error || !data) continue
-
-    const rawServers = Array.isArray(data.servers)
-      ? data.servers
-      : Object.entries(data.latestMetricsMap || {}).map(([id, metrics]) => ({ id, ...metrics }))
-
-    for (const server of rawServers) {
-      mergedData.servers.push({ ...server, source: baseUrl })
-    }
-
-    if (data.stats) {
-      mergedData.stats.total += data.stats.total || 0
-      mergedData.stats.online += data.stats.online || 0
-      mergedData.stats.offline += data.stats.offline || 0
-      mergedData.stats.globalNetRx += data.stats.globalNetRx || 0
-      mergedData.stats.globalNetTx += data.stats.globalNetTx || 0
-      mergedData.stats.globalSpeedIn += data.stats.globalSpeedIn || 0
-      mergedData.stats.globalSpeedOut += data.stats.globalSpeedOut || 0
-    }
-
-    if (data.regionStats) {
-      for (const code in data.regionStats) {
-        mergedData.regionStats[code] = (mergedData.regionStats[code] || 0) + data.regionStats[code]
-      }
-    }
-
-    if (data.sysConfig) {
-      mergedData.sysConfig = {
-        show_price: data.sysConfig.show_price ?? mergedData.sysConfig.show_price,
-        show_expire: data.sysConfig.show_expire ?? mergedData.sysConfig.show_expire,
-        show_bw: data.sysConfig.show_bw ?? mergedData.sysConfig.show_bw,
-        show_tf: data.sysConfig.show_tf ?? mergedData.sysConfig.show_tf,
-        show_time: data.sysConfig.show_time ?? mergedData.sysConfig.show_time,
-        site_title: multiSite ? localTitle : (data.sysConfig.site_title || mergedData.sysConfig.site_title),
-        backgroundImage: multiSite ? localBg : (data.sysConfig.backgroundImage || mergedData.sysConfig.backgroundImage || '')
-      }
+  if (data.sysConfig) {
+    mergedData.sysConfig = {
+      show_price: data.sysConfig.show_price ?? mergedData.sysConfig.show_price,
+      show_expire: data.sysConfig.show_expire ?? mergedData.sysConfig.show_expire,
+      show_bw: data.sysConfig.show_bw ?? mergedData.sysConfig.show_bw,
+      show_tf: data.sysConfig.show_tf ?? mergedData.sysConfig.show_tf,
+      show_time: data.sysConfig.show_time ?? mergedData.sysConfig.show_time,
+      site_title: multiSite ? localTitle : (data.sysConfig.site_title || mergedData.sysConfig.site_title),
+      backgroundImage: multiSite ? localBg : (data.sysConfig.backgroundImage || mergedData.sysConfig.backgroundImage || '')
     }
   }
+}
+
+export const fetchServersAllWithProgress = async (onResult) => {
+  const multiSite = hasMultipleApiBases()
+  const localTitle = getTitle() || DEFAULT_SITE_TITLE
+  const localBg = getBackgroundImage()
+
+  const mergedData = createEmptyMergedData()
+  mergedData.sysConfig.site_title = multiSite ? localTitle : DEFAULT_SITE_TITLE
+  mergedData.sysConfig.backgroundImage = multiSite ? localBg : ''
+
+  let corsErrorSites = []
+
+  await http.getAllWithProgress('/api/servers', (result) => {
+    mergeSiteResult(mergedData, result, multiSite, localTitle, localBg)
+    if (result.corsError && !corsErrorSites.includes(result.baseUrl)) corsErrorSites.push(result.baseUrl)
+    onResult({ ...mergedData, corsErrorSites })
+  })
 
   return mergedData
 }

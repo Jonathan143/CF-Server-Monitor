@@ -2464,6 +2464,34 @@ body::before {
     50% { opacity: 0.5; }
 }
 
+.loading-more {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-family: var(--terminal-font);
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border-color);
+    z-index: 100;
+}
+
+.loading-spinner-small {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--accent-cyan);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
 /* --------------------------------------------------------------------------
    42. Password Input Toggle Styles
    -------------------------------------------------------------------------- */

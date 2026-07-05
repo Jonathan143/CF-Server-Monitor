@@ -284,7 +284,8 @@ const translations = reactive({
     testNotificationFailed: 'Failed to send test notification',
     saveSuccess: 'Settings saved successfully',
     serverEdited: 'Server updated successfully',
-    serversDeleted: 'Servers deleted successfully'
+    serversDeleted: 'Servers deleted successfully',
+    corsBlocked: 'site blocks cross-origin access, please fix.',
   },
   zh: {
     collectInterval: '采集间隔（秒）',
@@ -568,7 +569,8 @@ const translations = reactive({
     testNotificationFailed: '测试通知发送失败',
     saveSuccess: '设置保存成功',
     serverEdited: '服务器更新成功',
-    serversDeleted: '服务器批量删除成功'
+    serversDeleted: '服务器批量删除成功',
+    corsBlocked: '站点禁止跨域访问，请修复。'
   }
 })
 

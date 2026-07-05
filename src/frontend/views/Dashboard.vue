@@ -186,6 +186,28 @@
     </div>
     </template>
 
+    <div v-if="!isLoading && sitesRemaining > 0" class="loading-more">
+      <div class="loading-spinner-small"></div>
+      <span>Loading remaining sites... ({{ sitesRemaining }})</span>
+    </div>
+
+    <div v-if="hasCorsError" class="modal-overlay active">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <div class="modal-title">$ cors --error</div>
+          <button class="modal-close" @click="hasCorsError = null">✕</button>
+        </div>
+        <div v-for="site in hasCorsError" :key="site" class="danger-box mb-4">
+          <div class="flex-center-gap-sm">
+            <span class="danger-label">❌ {{ site }} {{ trans.corsBlocked }}</span>
+          </div>
+        </div>
+        <div class="modal-footer flex-justify-end">
+          <button @click="hasCorsError = null" class="btn">OK</button>
+        </div>
+      </div>
+    </div>
+
     <Footer />
   </div>
 </template>
@@ -196,8 +218,8 @@ import { useRouter } from 'vue-router'
 import TerminalHeader from '../components/TerminalHeader.vue'
 import ServerCard from '../components/ServerCard.vue'
 import Footer from '../components/Footer.vue'
-import { fetchServers, fetchServersAll, formatBytes, createLiveSocket, getFlagRegionCode, getApiBases, getTrafficUsagePercent, isServerOnline } from '../utils/api.js'
-import { t, currentLang, useTranslation } from '../utils/i18n.js'
+import { fetchServersAll, fetchServersAllWithProgress, formatBytes, createLiveSocket, getFlagRegionCode, getApiBases, getTrafficUsagePercent, isServerOnline } from '../utils/api.js'
+import { currentLang, useTranslation } from '../utils/i18n.js'
 import { TIME, DEFAULT_SITE_TITLE } from '../utils/constants'
 import { normalizeTimestamp as normalizeMetricTimestamp } from '../utils/time.js'
 
@@ -218,6 +240,8 @@ const currentFilter = ref('all')
 const mapInitialized = ref(false)
 const liveConnected = ref(false)
 const isLoading = ref(true)
+const sitesRemaining = ref(0)
+const hasCorsError = ref(null)
 const now = ref(Date.now())
 const router = useRouter()
 
@@ -511,25 +535,65 @@ const runDashboardTick = () => {
   if (currentView.value === 'map') drawMarkers()
 }
 
+const mergeServersIntoList = (rawServers) => {
+  const existingById = new Map(servers.value.map(s => [s.id, s]))
+  return rawServers.map(s => {
+    const prev = existingById.get(s.id)
+    const sampleTs = normalizeMetricTimestamp(s.sample_timestamp ?? s.timestamp ?? s.last_updated, getServerSampleTimestamp(prev))
+    const reportTs = normalizeMetricTimestamp(s.report_timestamp ?? s.last_updated, getServerReportTimestamp(prev, null))
+    return withDisplayTiming({ ...prev, ...s, sample_timestamp: sampleTs, report_timestamp: reportTs }, sampleTs, now.value)
+  })
+}
+
 const refreshData = async () => {
+  const bases = getApiBases()
+  const isMultiSite = bases.length > 1
+
+  if (isMultiSite) {
+    sitesRemaining.value = bases.length
+    hasCorsError.value = null
+
+    try {
+      await fetchServersAllWithProgress((data) => {
+        const rawServers = Array.isArray(data.servers)
+          ? data.servers
+          : Object.entries(data.latestMetricsMap || {}).map(([id, metrics]) => ({ id, ...metrics }))
+
+        servers.value = mergeServersIntoList(rawServers)
+        recomputeStats(now.value)
+
+        sysConfig.value = {
+          show_price: data.sysConfig?.show_price ?? true,
+          show_expire: data.sysConfig?.show_expire ?? true,
+          show_bw: data.sysConfig?.show_bw ?? true,
+          show_tf: data.sysConfig?.show_tf ?? true,
+          show_time: data.sysConfig?.show_time ?? true,
+          site_title: data.sysConfig?.site_title || DEFAULT_SITE_TITLE
+        }
+
+        if (data.corsErrorSites?.length && !hasCorsError.value) hasCorsError.value = [...data.corsErrorSites]
+        if (isLoading.value) isLoading.value = false
+        drawMarkers()
+        sitesRemaining.value = Math.max(0, sitesRemaining.value - 1)
+      })
+    } catch (e) {
+      console.log('[INFO] Multi-site refresh error:', e)
+    }
+
+    isLoading.value = false
+    return
+  }
+
+  // Single-site fallback
   try {
-    const bases = getApiBases()
-    const data = bases.length > 0 ? await fetchServersAll() : await fetchServers()
+    const data = await fetchServersAll()
     if (!data) return
 
     const rawServers = Array.isArray(data.servers)
       ? data.servers
       : Object.entries(data.latestMetricsMap || {}).map(([id, metrics]) => ({ id, ...metrics }))
 
-    const existingById = new Map(servers.value.map(s => [s.id, s]))
-    const nextList = rawServers.map(s => {
-      const prev = existingById.get(s.id)
-      const sampleTs = normalizeMetricTimestamp(s.sample_timestamp ?? s.timestamp ?? s.last_updated, getServerSampleTimestamp(prev))
-      const reportTs = normalizeMetricTimestamp(s.report_timestamp ?? s.last_updated, getServerReportTimestamp(prev, null))
-      return withDisplayTiming({ ...prev, ...s, sample_timestamp: sampleTs, report_timestamp: reportTs }, sampleTs, now.value)
-    })
-    servers.value = nextList
-
+    servers.value = mergeServersIntoList(rawServers)
     recomputeStats(now.value)
 
     sysConfig.value = {
