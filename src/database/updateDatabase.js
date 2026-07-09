@@ -44,6 +44,19 @@ export async function updateDatabase(db) {
   }
 }
 
+export async function isHistoryOptimized(db) {
+  const history_id_optimized = await getSettingByKey(db, 'history_id_optimized', true);
+  if(history_id_optimized) return true;
+  const minId = await db.prepare(`
+    SELECT id AS min_id
+    FROM metrics_history
+    ORDER BY id ASC
+    LIMIT 1
+  `).first();
+  if(!minId) return true;  // 空表，视为已优化
+  return minId.min_id > 10000000000000;
+}
+
 // 确保 旧版metrics_history 表有索引
 export async function ensureHistoryIndex(db) {
   const history_id_optimized = await getSettingByKey(db, 'history_id_optimized', true);
