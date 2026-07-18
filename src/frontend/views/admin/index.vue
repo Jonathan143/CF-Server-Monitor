@@ -34,7 +34,7 @@
             <span class="prompt">$</span> {{ trans.sudoStatus }}
           </div>
           <div class="header-actions">
-            <button @click="loadServers" class="btn" :disabled="adminSiteLoading">↻ {{ trans.refresh }}</button>
+            <button @click="refreshServers" class="btn" :disabled="adminSiteLoading">↻ {{ trans.refresh }}</button>
             <select
               v-if="isMultipleMode"
               v-model.number="selectedApiIndex"
@@ -103,6 +103,7 @@
           :groups="groups"
           :active-tab="activeTab"
           :selected-api-index="selectedApiIndex"
+          :latest-agent-version="latestAgentVersion"
           :copied-server-id="copiedServerId"
           :copied-note-server-id="copiedNoteServerId"
           @add-server="addServer"
@@ -177,7 +178,6 @@
         :target-os="targetOs"
         :collect-interval="collectInterval"
         :report-interval="reportInterval"
-        :ping-mode="pingMode"
         :custom-ct="customCt"
         :custom-cu="customCu"
         :custom-cm="customCm"
@@ -418,9 +418,10 @@ import DatabasePanel from './components/DatabasePanel.vue'
 import EditServerModal from './components/EditServerModal.vue'
 import DeleteServerModal from './components/DeleteServerModal.vue'
 import CopyCommandModal from './components/CopyCommandModal.vue'
-import { adminApi, login, logout as apiLogout, upgradeDatabase, clearHistory, getApiBases } from '../../utils/api'
+import { adminApi, login, logout as apiLogout, upgradeDatabase, clearHistory, getApiBases, fetchConfig } from '../../utils/api'
 import { hasMultipleApiBases } from '../../utils/config.js'
 import { t, useTranslation } from '../../utils/i18n'
+import { PING_NODE_FIELDS, validatePingNode } from '../../utils/pingNode.js'
 import { usePasswordVisibility } from '../../composables/usePasswordVisibility'
 import { useTurnstile } from './composables/useTurnstile'
 
@@ -477,6 +478,7 @@ const servers = ref([])
 const selectedServers = ref([])
 const stats = ref({ total: '-', online: 0, offline: 0, avg_cpu: 0 })
 const groups = ref(['Default'])
+const latestAgentVersion = ref('')
 const newServerName = ref('')
 const newServerGroup = ref('')
 
@@ -551,7 +553,6 @@ const editForm = ref({
   reset_day: 1,
   collect_interval: 0,
   report_interval: 60,
-  ping_mode: 'tcp',
   custom_ct: '',
   custom_cu: '',
   custom_cm: '',
@@ -592,7 +593,6 @@ const currentServerName = ref('')
 const targetOs = ref('linux')
 const collectInterval = ref(0)
 const reportInterval = ref(60)
-const pingMode = ref('tcp')
 const customCt = ref('')
 const customCu = ref('')
 const customCm = ref('')
@@ -601,6 +601,27 @@ const resetDay = ref(1)
 const rxCorrection = ref('')
 const txCorrection = ref('')
 const copiedCmd = ref(false)
+
+const getPingNodeLabel = (field) => ({
+  custom_ct: trans.value.customCt,
+  custom_cu: trans.value.customCu,
+  custom_cm: trans.value.customCm,
+  custom_bd: trans.value.customBd
+})[field] || field
+
+const getPingNodeValidation = (source) => {
+  const values = {}
+  for (const field of PING_NODE_FIELDS) {
+    const result = validatePingNode(source[field])
+    if (!result.valid) {
+      return { valid: false, field }
+    }
+    values[field] = result.value
+  }
+  return { valid: true, values }
+}
+
+const buildPingNodeError = (field) => `${getPingNodeLabel(field)}: ${trans.value.invalidPingNodeFormat}`
 
 const copyTextToClipboard = async (text) => {
   if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
@@ -662,8 +683,11 @@ const handleLogin = async () => {
     syncApiIndexQuery()
     clearTurnstile()
     turnstileVerified.value = hasSharedTurnstileVerified()
-    loadSettings()
-    loadServers()
+    await Promise.all([
+      loadSettings(),
+      loadServers(),
+      loadLatestAgentVersion()
+    ])
   } else {
     loginError.value = result.status === 403 ? 'Please complete the verification' : trans.value.errorInvalidUsername
     loginForm.value.password = ''
@@ -676,6 +700,7 @@ const handleLogin = async () => {
 const logout = async () => {
   apiLogout()
   isLoggedIn.value = false
+  latestAgentVersion.value = ''
   clearTurnstile()
   await loadTurnstileConfig()
 }
@@ -694,8 +719,11 @@ const initAdmin = async () => {
     if (savedTurnstileToken) {
       turnstileToken.value = savedTurnstileToken
     }
-    loadSettings()
-    loadServers()
+    await Promise.all([
+      loadSettings(),
+      loadServers(),
+      loadLatestAgentVersion()
+    ])
   } else {
     await loadTurnstileConfig()
   }
@@ -731,7 +759,8 @@ const switchAdminSite = async () => {
   try {
     await Promise.all([
       loadSettings(),
-      loadServers()
+      loadServers(),
+      loadLatestAgentVersion()
     ])
   } finally {
     adminSiteLoading.value = false
@@ -741,6 +770,16 @@ const switchAdminSite = async () => {
 const handleAdminApiIndexChange = async () => {
   syncApiIndexQuery()
   await switchAdminSite()
+}
+
+const loadLatestAgentVersion = async () => {
+  try {
+    const config = await fetchConfig(selectedApiIndex.value)
+    latestAgentVersion.value = config?.last_agent_version || ''
+  } catch (e) {
+    console.error('[ERROR] Load latest agent version failed:', e)
+    latestAgentVersion.value = ''
+  }
 }
 
 const loadSettings = async () => {
@@ -792,6 +831,8 @@ const loadSettings = async () => {
 const saveSettings = async () => {
   if (saving.value) return
 
+  validationError.value = null
+
   const jwtSecret = settings.value.jwt_secret
   if (jwtSecret && jwtSecret.length > 0 && jwtSecret.length < 32) {
     validationError.value = trans.value.jwtSecretMinLength
@@ -838,6 +879,12 @@ const saveSettings = async () => {
     }
   }
 
+  const pingNodeValidation = getPingNodeValidation(settings.value)
+  if (!pingNodeValidation.valid) {
+    validationError.value = buildPingNodeError(pingNodeValidation.field)
+    return
+  }
+
   if (settingsPanelRef.value) {
     const cspStaticValid = settingsPanelRef.value.validateCspField('csp_static')
     const cspApiValid = settingsPanelRef.value.validateCspField('csp_api')
@@ -873,10 +920,10 @@ const saveSettings = async () => {
       cloudflare_account_id: settings.value.cloudflare_account_id,
       cloudflare_token: settings.value.cloudflare_token,
       username: settings.value.username,
-      custom_ct: settings.value.custom_ct,
-      custom_cu: settings.value.custom_cu,
-      custom_cm: settings.value.custom_cm,
-      custom_bd: settings.value.custom_bd,
+      custom_ct: pingNodeValidation.values.custom_ct,
+      custom_cu: pingNodeValidation.values.custom_cu,
+      custom_cm: pingNodeValidation.values.custom_cm,
+      custom_bd: pingNodeValidation.values.custom_bd,
       csp_static: settings.value.csp_static || '',
       csp_api: settings.value.csp_api || ''
     }
@@ -922,6 +969,13 @@ const loadServers = async () => {
   } catch (e) {
     console.error('[ERROR] Load servers failed:', e)
   }
+}
+
+const refreshServers = async () => {
+  await Promise.all([
+    loadServers(),
+    loadLatestAgentVersion()
+  ])
 }
 
 const addServer = async () => {
@@ -972,7 +1026,6 @@ const copyCmd = (serverId) => {
   targetOs.value = 'linux'
   collectInterval.value = server?.collect_interval ?? 0
   reportInterval.value = server?.report_interval || 60
-  pingMode.value = server?.ping_mode || 'http'
   customCt.value = server?.custom_ct || settings.value.custom_ct
   customCu.value = server?.custom_cu || settings.value.custom_cu
   customCm.value = server?.custom_cm || settings.value.custom_cm
@@ -996,7 +1049,6 @@ const getCustomInstallCommand = () => {
       `-Url '${HOST}/update'`,
       `-CollectInterval ${collectInterval.value}`,
       `-ReportInterval ${reportInterval.value}`,
-      `-PingType ${pingMode.value}`,
       `-ResetDay ${resetDay.value ?? 1}`
     ]
     if (customCt.value) params.push(`-CtNode '${customCt.value}'`)
@@ -1013,7 +1065,7 @@ const getCustomInstallCommand = () => {
     : targetOs.value === 'openwrt' ? 'install-openwrt.sh'
     : targetOs.value === 'mac' ? 'install-mac.sh'
     : 'install.sh'
-  let cmd = `curl -sL ${HOST}/${script} | ${sudoPrefix}${shell} -s install -id=${copyServerId.value} -secret='${apiSecret.value}' -url=${HOST}/update -collect_interval=${collectInterval.value} -interval=${reportInterval.value} -ping=${pingMode.value} -reset_day=${resetDay.value ?? 1}`
+  let cmd = `curl -sL ${HOST}/${script} | ${sudoPrefix}${shell} -s install -id=${copyServerId.value} -secret='${apiSecret.value}' -url=${HOST}/update -collect_interval=${collectInterval.value} -interval=${reportInterval.value} -reset_day=${resetDay.value ?? 1}`
   if (customCt.value) cmd += ` -ct=${customCt.value}`
   if (customCu.value) cmd += ` -cu=${customCu.value}`
   if (customCm.value) cmd += ` -cm=${customCm.value}`
@@ -1077,7 +1129,6 @@ const openEditModal = (server) => {
     reset_day: server.reset_day ?? 1,
     collect_interval: server.collect_interval ?? 0,
     report_interval: server.report_interval || 60,
-    ping_mode: server.ping_mode || 'http',
     custom_ct: server.custom_ct || '',
     custom_cu: server.custom_cu || '',
     custom_cm: server.custom_cm || '',
@@ -1096,6 +1147,14 @@ const closeEditModal = () => {
 }
 
 const saveEdit = async () => {
+  validationError.value = null
+
+  const pingNodeValidation = getPingNodeValidation(editForm.value)
+  if (!pingNodeValidation.valid) {
+    validationError.value = buildPingNodeError(pingNodeValidation.field)
+    return
+  }
+
   const data = {
     action: 'edit',
     id: editForm.value.id,
@@ -1110,11 +1169,10 @@ const saveEdit = async () => {
     reset_day: editForm.value.reset_day,
     collect_interval: editForm.value.collect_interval,
     report_interval: editForm.value.report_interval,
-    ping_mode: editForm.value.ping_mode,
-    custom_ct: editForm.value.custom_ct,
-    custom_cu: editForm.value.custom_cu,
-    custom_cm: editForm.value.custom_cm,
-    custom_bd: editForm.value.custom_bd,
+    custom_ct: pingNodeValidation.values.custom_ct,
+    custom_cu: pingNodeValidation.values.custom_cu,
+    custom_cm: pingNodeValidation.values.custom_cm,
+    custom_bd: pingNodeValidation.values.custom_bd,
     rx_correction: editForm.value.rx_correction,
     tx_correction: editForm.value.tx_correction,
     is_hidden: editForm.value.is_hidden ? '1' : '0',

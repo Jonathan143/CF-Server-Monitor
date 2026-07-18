@@ -6,17 +6,17 @@ import {
   isValidTrafficCorrection,
   serializeAgentConfig,
   serializeCorrection,
-  validateAgentConfigInput
+  validateAgentConfigInput,
+  validatePingNode
 } from '../src/utils/agentConfig.js';
 import { md5Hash } from '../src/utils/common.js';
 
 const server = {
   collect_interval: 1,
-  ping_mode: 'tcp',
   report_interval: 60,
   reset_day: 15
 };
-const expected = 'collect_interval=1&ping_mode=tcp&report_interval=60&reset_day=15&schema_version=1&custom_ct=&custom_cu=&custom_cm=&custom_bd=';
+const expected = 'collect_interval=1&report_interval=60&reset_day=15&schema_version=2&custom_ct=&custom_cu=&custom_cm=&custom_bd=';
 
 const config = buildAgentConfig(server);
 assert.equal(serializeAgentConfig(config), expected);
@@ -46,24 +46,21 @@ for (const value of ['', 'abc', '中文', 'a'.repeat(1000)]) {
 
 assert.equal(validateAgentConfigInput(server).valid, true);
 assert.equal(validateAgentConfigInput({ ...server, collect_interval: '1' }).valid, false);
-assert.equal(validateAgentConfigInput({ ...server, ping_mode: 'http;reboot' }).valid, false);
 assert.equal(validateAgentConfigInput({ ...server, reset_day: 32 }).valid, false);
 assert.deepEqual(buildAgentConfig({}), {
   collect_interval: 0,
-  ping_mode: 'http',
   report_interval: 60,
   reset_day: 1,
   custom_ct: '',
   custom_cu: '',
   custom_cm: '',
   custom_bd: '',
-  schema_version: 1
+  schema_version: 2
 });
 
 // Test server-level ping node priority
 const serverWithCustomPing = {
   collect_interval: 0,
-  ping_mode: 'http',
   report_interval: 60,
   reset_day: 1,
   custom_ct: 'ct-server.example.com',
@@ -77,6 +74,14 @@ assert.equal(resolvedConfig.custom_ct, 'ct-server.example.com');
 assert.equal(resolvedConfig.custom_cu, 'cu-global.example.com');
 assert.equal(resolvedConfig.custom_cm, 'cm-global.example.com');
 assert.equal(resolvedConfig.custom_bd, 'bd-global.example.com');
-assert.equal(buildAgentConfig({ custom_ct: 'a'.repeat(100) }).custom_ct.length, 50);
+assert.equal(buildAgentConfig({ custom_ct: 'gd-ct-v4.ip.zstaticcdn.com:80' }).custom_ct, 'gd-ct-v4.ip.zstaticcdn.com:80');
+assert.equal(buildAgentConfig({ custom_ct: 'GD-CT-V4.IP.ZSTATICCDN.COM:080' }).custom_ct, 'gd-ct-v4.ip.zstaticcdn.com:80');
+assert.equal(buildAgentConfig({ custom_ct: 'a'.repeat(100) }).custom_ct, '');
+assert.equal(buildAgentConfig({ custom_ct: 'gd-ct-v4.ip.zstaticcdn.com:99999' }).custom_ct, '');
+assert.equal(buildAgentConfig({ custom_ct: 'foo:bar' }).custom_ct, '');
+assert.equal(buildAgentConfig({ custom_ct: '2001:db8::1' }).custom_ct, '');
+assert.deepEqual(validatePingNode('foo:443'), { valid: true, value: 'foo:443' });
+assert.equal(validatePingNode('foo:bar').valid, false);
+assert.equal(validatePingNode('2001:db8::1').valid, false);
 
 console.log('agent config tests passed');
