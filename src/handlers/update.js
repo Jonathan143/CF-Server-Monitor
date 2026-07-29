@@ -4,6 +4,7 @@ import { mergeMetricsIntoServer } from '../utils/metrics.js';
 import { createErrorResponse, createUnauthorizedResponse, createNotFoundResponse, createBadRequestResponse } from '../utils/errors.js';
 import { ensureServerOptimization } from '../database/indexOptimization.js';
 import { AGENT_VERSION, loadSiteSettings } from '../utils/settings.js';
+import { cacheLatestReportUpdate } from '../utils/latestReportCache.js';
 import {
   AGENT_CONFIG_MD5_HEADER,
   AGENT_CONFIG_SCHEMA_HEADER,
@@ -36,7 +37,7 @@ let batchQueue = new Map();
 let flushingPromise = null;
 
 // 用于过滤不需要实时更新的字段
-const BROADCAST_DELETE_FIELDS = ['id', 'name', 'region', 'arch', 'os', 'cpu_info', 'cpu_cores', 'expire_date', 'server_group', 'traffic_limit', 'net_rx_monthly', 'net_tx_monthly', 'boot_time', 'timestamp', 'ip_v4', 'ip_v6'];
+const BROADCAST_DELETE_FIELDS = ['id', 'name', 'region', 'arch', 'os', 'kernel_version', 'cpu_info', 'cpu_cores', 'expire_date', 'server_group', 'traffic_limit', 'net_rx_monthly', 'net_tx_monthly', 'boot_time', 'timestamp', 'ip_v4', 'ip_v6'];
 
 function normalizeTimestamp(value, fallback = Date.now()) {
   const ts = Number(value);
@@ -50,6 +51,14 @@ function normalizeAgentVersion(value) {
     .trim()
     .replace(/[^0-9A-Za-z.+_-]/g, '')
     .slice(0, 64);
+}
+
+function getRequestIp(request) {
+  const directIp = request.headers?.get('cf-connecting-ip') || request.headers?.get('x-real-ip') || '';
+  if (directIp) return directIp.trim().slice(0, 128);
+
+  const forwardedFor = request.headers?.get('x-forwarded-for') || '';
+  return forwardedFor.split(',')[0].trim().slice(0, 128);
 }
 
 function createAgentInstructionResponse(body) {
@@ -172,6 +181,7 @@ export async function handleUpdate(request, env, ctx) {
     }
 
     let regionCode = request.cf?.country || request.headers?.get('cf-ipcountry') || '';
+    const ip = getRequestIp(request);
     const agentVersion = normalizeAgentVersion(request.headers.get('X-Agent-Version'));
 
     const serverDetail = await getServerDetail(env.DB, id, true);
@@ -237,10 +247,12 @@ export async function handleUpdate(request, env, ctx) {
       latestSample.metrics,
       regionCode,
       latestSample.ts,
-      agentVersion
+      agentVersion,
+      ip
     );
 
     const broadcastSamples = toBroadcastSamples(id, samples, regionCode, agentVersion);
+    cacheLatestReportUpdate(id, broadcastSamples, Date.now());
     // 加入批量队列，由后台定时任务统一推送到 DO
     queueBroadcastSamples(id, broadcastSamples);
     ctx.waitUntil(_ensureBatchFlush(env));

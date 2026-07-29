@@ -96,7 +96,7 @@ $DebugPreference = "SilentlyContinue"
 $ErrorActionPreference = "Stop"
 
 $APP_NAME = "CF-Server-Monitor"
-$AGENT_VERSION = "1.3.2"
+$AGENT_VERSION = "1.3.4"
 $TASK_NAME = "CFProbe"
 # 获取脚本所在目录
 if ($MyInvocation.MyCommand.Path) {
@@ -112,10 +112,6 @@ $CONFIG_FILE = Join-Path $CONFIG_DIR "cf_probe_config.json"
 $LOG_FILE = Join-Path $CONFIG_DIR "cf_probe.log"
 $TRAFFIC_FILE = Join-Path $CONFIG_DIR "cf_probe_traffic.dat"
 
-$DEFAULT_CT = "gd-ct-dualstack.ip.zstaticcdn.com"
-$DEFAULT_CU = "gd-cu-dualstack.ip.zstaticcdn.com"
-$DEFAULT_CM = "gd-cm-dualstack.ip.zstaticcdn.com"
-$DEFAULT_BD = "ip.zstaticcdn.com"
 $MAX_TRAFFIC_CORRECTION_GB = 1000000
 
 $MAX_LOG_SIZE = 1MB
@@ -660,24 +656,67 @@ function Get-BootTime {
     }
 }
 
+function ConvertTo-GpuUsage {
+    param(
+        [object]$Value,
+        [object]$DefaultValue = $null
+    )
+    if ($null -eq $Value) { return $DefaultValue }
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $DefaultValue }
+    $parsed = 0.0
+    if ([double]::TryParse($text, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) {
+        return $parsed
+    }
+    return $DefaultValue
+}
+
 function Get-GpuInfo {
-    $gpuUsage = $null
-    $gpuName = $null
+    $gpuList = @()
     try {
-        $nvidia = & nvidia-smi --query-gpu=name,utilization.gpu --format=csv,noheader,nounits 2>$null
+        $nvidia = & nvidia-smi --query-gpu=index,name,utilization.gpu --format=csv,noheader,nounits 2>$null
         if ($nvidia) {
-            $parts = ($nvidia | Select-Object -First 1) -split ','
-            $gpuName = $parts[0].Trim()
-            $gpuUsage = $parts[1].Trim()
+            foreach ($line in @($nvidia)) {
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                $parts = ([string]$line) -split ','
+                if ($parts.Count -lt 3) { continue }
+                $gpuId = $parts[0].Trim()
+                $gpuUsage = ConvertTo-GpuUsage -Value $parts[$parts.Count - 1]
+                if ($parts.Count -gt 3) {
+                    $gpuName = ($parts[1..($parts.Count - 2)] -join ',').Trim()
+                } else {
+                    $gpuName = $parts[1].Trim()
+                }
+                if (-not [string]::IsNullOrWhiteSpace($gpuName)) {
+                    $gpuList += [pscustomobject]@{
+                        name = $gpuName
+                        info = $gpuUsage
+                        id = $gpuId
+                    }
+                }
+            }
         }
     } catch {}
-    if (-not $gpuName) {
+
+    if ($gpuList.Count -eq 0) {
         try {
-            $gpu = Get-CimInstance Win32_VideoController | Select-Object -First 1
-            $gpuName = $gpu.Name
+            $idx = 0
+            $controllers = Get-CimInstance Win32_VideoController
+            foreach ($controller in @($controllers)) {
+                $gpuName = [string]$controller.Name
+                if ([string]::IsNullOrWhiteSpace($gpuName)) { continue }
+                $gpuList += [pscustomobject]@{
+                    name = $gpuName.Trim()
+                    info = 0
+                    id = $idx.ToString()
+                }
+                $idx++
+            }
         } catch {}
     }
-    return @{ usage = $gpuUsage; name = $gpuName }
+
+    if ($gpuList.Count -gt 0) { return $gpuList }
+    return $null
 }
 
 function Get-LoadAvg {
@@ -1156,10 +1195,10 @@ function Start-TimerCollectLoop {
             reset_day = [int]$ResetDay
             auto_update = $newAutoUpdate
             config_md5 = "none"
-            ct_node = if ($CtNode) { $CtNode } else { $DEFAULT_CT }
-            cu_node = if ($CuNode) { $CuNode } else { $DEFAULT_CU }
-            cm_node = if ($CmNode) { $CmNode } else { $DEFAULT_CM }
-            bd_node = if ($BdNode) { $BdNode } else { $DEFAULT_BD }
+            ct_node = if ($CtNode) { $CtNode } else { "" }
+            cu_node = if ($CuNode) { $CuNode } else { "" }
+            cm_node = if ($CmNode) { $CmNode } else { "" }
+            bd_node = if ($BdNode) { $BdNode } else { "" }
         }
         Save-Config -Config $config
         Write-Log "已保存配置到: $CONFIG_FILE" "INFO"
@@ -1181,10 +1220,10 @@ function Start-TimerCollectLoop {
         $resetDay = 1
     }
     $configMd5 = if ($config.config_md5) { $config.config_md5.ToString().Trim().ToLowerInvariant() } else { "none" }
-    $ctNode = if ($CtNode) { $CtNode } else { Get-ConfigProperty $config 'ct_node' $DEFAULT_CT }
-    $cuNode = if ($CuNode) { $CuNode } else { Get-ConfigProperty $config 'cu_node' $DEFAULT_CU }
-    $cmNode = if ($CmNode) { $CmNode } else { Get-ConfigProperty $config 'cm_node' $DEFAULT_CM }
-    $bdNode = if ($BdNode) { $BdNode } else { Get-ConfigProperty $config 'bd_node' $DEFAULT_BD }
+    $ctNode = if ($CtNode) { $CtNode } else { Get-ConfigProperty $config 'ct_node' "" }
+    $cuNode = if ($CuNode) { $CuNode } else { Get-ConfigProperty $config 'cu_node' "" }
+    $cmNode = if ($CmNode) { $CmNode } else { Get-ConfigProperty $config 'cm_node' "" }
+    $bdNode = if ($BdNode) { $BdNode } else { Get-ConfigProperty $config 'bd_node' "" }
     try {
         $autoUpdate = if ($AutoUpdate -ne "") {
             ConvertTo-BinaryFlag -Value $AutoUpdate -Default "0" -Strict
@@ -1243,6 +1282,34 @@ function Start-TimerCollectLoop {
     $script:cs_cmNode = $cmNode
     $script:cs_bdNode = $bdNode
     $script:cs_autoUpdate = $autoUpdate
+
+    # ========================================
+    # 缓存机制变量
+    # ========================================
+    # 磁盘检测间隔（秒）- 2分钟
+    $script:cs_diskCheckInterval = 120
+    $script:cs_lastDiskCheck = 0
+    $script:cs_diskTotal = 0
+    $script:cs_diskUsed = 0
+
+    # 状态检测间隔（秒）- 固定60秒
+    $script:cs_statusCheckInterval = 60
+    $script:cs_lastStatusCheck = 0
+
+    # 缓存的状态数据
+    $script:cs_cpuInfo = ""
+    $script:cs_cpuCores = 1
+    $script:cs_bootTime = 0
+    $script:cs_osName = ""
+    $script:cs_arch = ""
+    $script:cs_kernelVersion = ""
+    $script:cs_gpuInfoValue = $null
+    $script:cs_loadAvg = "0.00 0.00 0.00"
+    $script:cs_processCount = 0
+    $script:cs_tcpConn = 0
+    $script:cs_udpConn = 0
+    $script:cs_rxMonthly = 0
+    $script:cs_txMonthly = 0
 
     $pingTempFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "cf_probe_ping_results.json")
 
@@ -1315,18 +1382,14 @@ function Start-TimerCollectLoop {
             if ([string]::IsNullOrWhiteSpace($cmN)) { $script:cs_pingCm = $false; $script:cs_lossCm = $false }
             if ([string]::IsNullOrWhiteSpace($bdN)) { $script:cs_pingBd = $false; $script:cs_lossBd = $false }
 
-            # 采集各项指标
+            # 实时采集：CPU、内存、网络（网速计算需要每次执行）
             $cpuPercent = Get-CpuUsage
-            $cpuInfo = Get-CpuInfo
-            $cpuCores = Get-CpuCores
             $mem = Get-MemoryInfo
             $swap = Get-SwapInfo
-            $disk = Get-DiskInfo
 
             $netStat = Get-NetworkStats
             $rxNow = [long]$netStat.rx
             $txNow = [long]$netStat.tx
-            $netTraffic = Update-MonthlyTraffic -CurrentRx $rxNow -CurrentTx $txNow -ResetDay $rDay
 
             $rxPrev = if ($script:cs_prevNet.time -gt 0) { $script:cs_prevNet.rx } else { $rxNow }
             $txPrev = if ($script:cs_prevNet.time -gt 0) { $script:cs_prevNet.tx } else { $txNow }
@@ -1335,13 +1398,53 @@ function Start-TimerCollectLoop {
             $txSpeed = [math]::Max(($txNow - $txPrev) / $deltaTime, 0)
             $script:cs_prevNet = @{ rx = $rxNow; tx = $txNow; time = $now }
 
-            $conn = Get-TcpUdpConnections
-            $processCount = Get-ProcessCount
-            $gpu = Get-GpuInfo
-            $bootTime = Get-BootTime
-            $loadAvg = Get-LoadAvg -CpuPercent $cpuPercent
-            $arch = if ([Environment]::Is64BitOperatingSystem) { "x86_64" } else { "x86" }
-            $osName = (Get-CimInstance Win32_OperatingSystem).Caption
+            # 磁盘检测缓存（每2分钟检测一次）
+            if ($now - $script:cs_lastDiskCheck -ge $script:cs_diskCheckInterval -or $script:cs_lastDiskCheck -eq 0) {
+                $disk = Get-DiskInfo
+                $script:cs_diskTotal = $disk.total
+                $script:cs_diskUsed = $disk.used
+                $script:cs_lastDiskCheck = $now
+            }
+
+            # 静态信息（仅首次运行时获取，运行期间不会变化）
+            if ($script:cs_lastStatusCheck -eq 0) {
+                $script:cs_cpuInfo = Get-CpuInfo
+                $script:cs_cpuCores = Get-CpuCores
+                $script:cs_bootTime = Get-BootTime
+                $script:cs_arch = if ([Environment]::Is64BitOperatingSystem) { "x86_64" } else { "x86" }
+                # 获取操作系统信息（Caption 和 Version），合并调用避免重复查询
+                try {
+                    $os = Get-CimInstance Win32_OperatingSystem
+                    $script:cs_osName = $os.Caption
+                    $script:cs_kernelVersion = $os.Version
+                } catch {
+                    $script:cs_osName = ""
+                    $script:cs_kernelVersion = ""
+                }
+            }
+
+            # 状态检测缓存（进程数、连接数、GPU使用率、负载、当月累计流量，每STATUS_CHECK_INTERVAL检测一次）
+            if ($now - $script:cs_lastStatusCheck -ge $script:cs_statusCheckInterval -or $script:cs_lastStatusCheck -eq 0) {
+                # 动态状态
+                $script:cs_loadAvg = Get-LoadAvg -CpuPercent $cpuPercent
+                $script:cs_processCount = Get-ProcessCount
+                $conn = Get-TcpUdpConnections
+                $script:cs_tcpConn = $conn.tcp
+                $script:cs_udpConn = $conn.udp
+                $gpuInfo = @(Get-GpuInfo)
+                $script:cs_gpuInfoValue = $null
+                if ($gpuInfo.Count -gt 0) {
+                    $script:cs_gpuInfoValue = New-Object System.Collections.ArrayList
+                    foreach ($gpu in $gpuInfo) { [void]$script:cs_gpuInfoValue.Add($gpu) }
+                }
+
+                # 计算当月累计流量
+                $netTraffic = Update-MonthlyTraffic -CurrentRx $rxNow -CurrentTx $txNow -ResetDay $rDay
+                $script:cs_rxMonthly = $netTraffic.rx
+                $script:cs_txMonthly = $netTraffic.tx
+
+                $script:cs_lastStatusCheck = $now
+            }
 
             # 构建指标
             $metrics = @{
@@ -1350,25 +1453,25 @@ function Start-TimerCollectLoop {
                 ram_used = $mem.used.ToString()
                 swap_total = $swap.total.ToString()
                 swap_used = $swap.used.ToString()
-                disk_total = $disk.total.ToString()
-                disk_used = $disk.used.ToString()
-                load_avg = $loadAvg
-                boot_time = $bootTime.ToString()
+                disk_total = $script:cs_diskTotal.ToString()
+                disk_used = $script:cs_diskUsed.ToString()
+                load_avg = $script:cs_loadAvg
+                boot_time = $script:cs_bootTime.ToString()
                 net_rx = $rxNow.ToString()
                 net_tx = $txNow.ToString()
-                net_rx_monthly = $netTraffic.rx.ToString()
-                net_tx_monthly = $netTraffic.tx.ToString()
+                net_rx_monthly = $script:cs_rxMonthly.ToString()
+                net_tx_monthly = $script:cs_txMonthly.ToString()
                 net_in_speed = [math]::Floor($rxSpeed).ToString()
                 net_out_speed = [math]::Floor($txSpeed).ToString()
-                os = $osName
-                arch = $arch
-                cpu_info = $cpuInfo
-                cpu_cores = $cpuCores.ToString()
-                gpu = if ($gpu.usage) { [double]$gpu.usage } else { $null }
-                gpu_info = $gpu.name
-                processes = $processCount.ToString()
-                tcp_conn = $conn.tcp.ToString()
-                udp_conn = $conn.udp.ToString()
+                os = $script:cs_osName
+                arch = $script:cs_arch
+                kernel_version = $script:cs_kernelVersion
+                cpu_info = $script:cs_cpuInfo
+                cpu_cores = $script:cs_cpuCores.ToString()
+                gpu_info = $script:cs_gpuInfoValue
+                processes = $script:cs_processCount.ToString()
+                tcp_conn = $script:cs_tcpConn.ToString()
+                udp_conn = $script:cs_udpConn.ToString()
                 ip_v4 = $script:cs_ipV4
                 ip_v6 = $script:cs_ipV6
                 ping_ct = $script:cs_pingCt
@@ -1561,10 +1664,10 @@ function Install-Service {
         reset_day = [int]$ResetDay
         auto_update = $autoUpdateValue
         config_md5 = "none"
-        ct_node = if ($CtNode) { $CtNode } else { Get-ConfigProperty $existingConfig 'ct_node' $DEFAULT_CT }
-        cu_node = if ($CuNode) { $CuNode } else { Get-ConfigProperty $existingConfig 'cu_node' $DEFAULT_CU }
-        cm_node = if ($CmNode) { $CmNode } else { Get-ConfigProperty $existingConfig 'cm_node' $DEFAULT_CM }
-        bd_node = if ($BdNode) { $BdNode } else { Get-ConfigProperty $existingConfig 'bd_node' $DEFAULT_BD }
+        ct_node = if ($CtNode) { $CtNode } else { Get-ConfigProperty $existingConfig 'ct_node' "" }
+        cu_node = if ($CuNode) { $CuNode } else { Get-ConfigProperty $existingConfig 'cu_node' "" }
+        cm_node = if ($CmNode) { $CmNode } else { Get-ConfigProperty $existingConfig 'cm_node' "" }
+        bd_node = if ($BdNode) { $BdNode } else { Get-ConfigProperty $existingConfig 'bd_node' "" }
     }
 
     if (-not $config.server_id -or -not $config.secret -or -not $config.worker_url) {

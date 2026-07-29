@@ -20,6 +20,41 @@ import { MetricsBroadcaster as _MetricsBroadcaster }
 
 export class MetricsBroadcaster extends _MetricsBroadcaster {}
 
+async function fetchStaticAsset(request, env, path) {
+  if (!env.ASSETS || request.method !== 'GET') return null;
+
+  try {
+    const res = await env.ASSETS.fetch(new Request(`http://static${path}`, request));
+    return res.ok ? res : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function isAdminAssetReferrer(request) {
+  const referrer = request.headers.get('Referer') || request.headers.get('Referrer') || '';
+  if (!referrer) return false;
+
+  try {
+    const requestUrl = new URL(request.url);
+    const referrerUrl = new URL(referrer);
+    return referrerUrl.origin === requestUrl.origin &&
+      (referrerUrl.pathname === '/admin' || referrerUrl.pathname.startsWith('/admin/'));
+  } catch (_) {
+    return false;
+  }
+}
+
+function cleanThemeAssetResponse(response) {
+  const headers = new Headers(response.headers);
+  headers.delete('X-CFSM-Theme-Asset');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
 async function getEncryptionKey(env, sys) {
   let secret = (sys && sys.jwt_secret) || env.TURNSTILE_SECRET_KEY || env.API_SECRET || 'default_secret_key_for_turnstile_encryption';
   secret += '_turnstile';
@@ -156,13 +191,36 @@ export default {
       return createOptionsResponse(request, corsAllowedOrigins);
     }
 
-    if (env.ASSETS && method === 'GET') {
+    if (method === 'GET' && path === '/admin/') {
+      const target = new URL(request.url);
+      const search = target.search;
+      target.pathname = '/admin';
+      target.search = '';
+      target.hash = `admin${search}`;
+      return Response.redirect(target.toString(), 302);
+    }
+
+    if (method === 'GET' && path.startsWith('/assets/')) {
+      if (isAdminAssetReferrer(request)) {
+        const staticAssetResponse = await fetchStaticAsset(request, env, path);
+        if (staticAssetResponse) {
+          return applyCors(staticAssetResponse, request, corsAllowedOrigins);
+        }
+      }
+
       try {
-        const res = await env.ASSETS.fetch(new Request(`http://static${path}`, request));
-        if (res.ok) {
-          return applyCors(res, request, corsAllowedOrigins);
+        const themeAssetResponse = await serveFrontend(request, env, await loadSettings(env.DB));
+        if (themeAssetResponse.headers.get('X-CFSM-Theme-Asset') === '1') {
+          return applyCors(cleanThemeAssetResponse(themeAssetResponse), request, corsAllowedOrigins);
         }
       } catch (e) {
+      }
+    }
+
+    if (env.ASSETS && method === 'GET') {
+      const staticAssetResponse = await fetchStaticAsset(request, env, path);
+      if (staticAssetResponse) {
+        return applyCors(staticAssetResponse, request, corsAllowedOrigins);
       }
     }
 
@@ -278,8 +336,8 @@ export default {
         });
       }},
       { method: 'GET', path: '/theme', handler: async () => {
-        const themes = await handleTheme()
-        return createSuccessResponse({ themes })
+        const themeStore = await handleTheme()
+        return createSuccessResponse(themeStore)
       }},
       { method: 'GET', path: '/api/server', handler: async () => {
         await ensureSiteSettings();
@@ -295,7 +353,7 @@ export default {
         await ensureSiteSettings();
         const id = url.searchParams.get('id');
         const hours = parseFloat(url.searchParams.get('hours') || '24');
-        const allColumns = 'cpu, gpu_info, ram_total, ram_used, disk_total, disk_used, processes, net_in_speed, net_out_speed, tcp_conn, udp_conn, ping_ct, ping_cu, ping_cm, ping_bd, loss_ct, loss_cu, loss_cm, loss_bd, swap_total, swap_used, load_avg, region';
+        const allColumns = 'cpu, gpu_info, ram_total, ram_used, disk_total, disk_used, processes, net_in_speed, net_out_speed, tcp_conn, udp_conn, ping_ct, ping_cu, ping_cm, ping_bd, loss_ct, loss_cu, loss_cm, loss_bd, swap_total, swap_used, load_avg, region, kernel_version';
         // 后续版本可以删掉region 字段，用于升级数据库提示
         return fetchHistoryData(env, request, id, hours, allColumns, sys);
       }},
@@ -351,8 +409,8 @@ export default {
       }
     }
 
-    const appearanceOptions = await loadAppearanceOptions(env.DB);
-    const frontendResponse = await serveFrontend(request, env, appearanceOptions);
+    const fullSettings = await loadSettings(env.DB);
+    const frontendResponse = await serveFrontend(request, env, fullSettings);
     return applyCors(frontendResponse, request, corsAllowedOrigins);
   },
 

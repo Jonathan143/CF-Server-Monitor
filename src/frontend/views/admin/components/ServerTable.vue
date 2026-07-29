@@ -31,6 +31,7 @@
             <th class="table-center-cell col-width-35">↕️</th>
             <th class="col-width-30"><input type="checkbox" id="select-all" @change="$emit('select-all', $event)" class="checkbox-accent-green"></th>
             <th>{{ trans.hostname.toUpperCase() }}</th>
+            <th>IP</th>
             <th>{{ trans.group.toUpperCase() }}</th>
             <th>{{ trans.tags.toUpperCase() }}</th>
             <th>{{ trans.note.toUpperCase() }}</th>
@@ -47,7 +48,7 @@
         </thead>
         <tbody>
           <tr v-if="servers.length === 0">
-            <td colspan="15" class="empty-state"><span class="empty-icon">📦</span> {{ trans.noServers }}</td>
+            <td colspan="16" class="empty-state"><span class="empty-icon">📦</span> {{ trans.noServers }}</td>
           </tr>
           <tr
             v-for="server in servers"
@@ -67,8 +68,24 @@
                   <span class="flag-fallback">🏳️</span>
                   <OsIcon :os="server.os" />
                 </span>
-                <router-link :to="'/server/' + server.id + (selectedApiIndex ? '?apiIndex=' + selectedApiIndex : '')" class="server-name-link">{{ server.name }}</router-link>
+                <a
+                  v-if="themeUrl"
+                  :href="getPublicServerHref(server)"
+                  class="server-name-link"
+                >{{ server.name }}</a>
+                <router-link
+                  v-else
+                  :to="getDefaultServerRoute(server)"
+                  class="server-name-link"
+                >{{ server.name }}</router-link>
               </div>
+            </td>
+            <td>
+              <span
+                class="spec-text"
+                :class="{ 'spec-copied': isSpecCopied(server, 'ip') }"
+                @dblclick.stop="emitCopySpec(server, 'ip', server.ip)"
+              >{{ server.ip || '-' }}</span>
             </td>
             <td><span class="group-tag">{{ server.server_group || trans.default }}</span></td>
             <td>
@@ -85,15 +102,40 @@
               >{{ server.note || '-' }}</span>
             </td>
             <td><span class="price-tag">{{ formatServerPrice(server) }}</span></td>
-            <td><span class="spec-text">{{ formatServerCurrency(server) }}</span></td>
-            <td><span class="spec-text">{{ formatServerBillingCycle(server) }}</span></td>
-            <td><span class="date-text">{{ server.expire_date || '-' }}</span></td>
-            <td><span class="spec-text">{{ isServerAutoRenewal(server) ? trans.enabled : trans.disabled }}</span></td>
-            <td><span class="spec-text">{{ server.traffic_limit ? formatBytes(server.traffic_limit * 1024 * 1024 * 1024) : '-' }}</span></td>
             <td>
               <span
                 class="spec-text"
-                :class="getAgentVersionClass(server.agent_version)"
+                :class="{ 'spec-copied': isSpecCopied(server, 'currency') }"
+                @dblclick.stop="emitCopySpec(server, 'currency', formatServerCurrency(server))"
+              >{{ formatServerCurrency(server) }}</span>
+            </td>
+            <td>
+              <span
+                class="spec-text"
+                :class="{ 'spec-copied': isSpecCopied(server, 'billing_cycle') }"
+                @dblclick.stop="emitCopySpec(server, 'billing_cycle', formatServerBillingCycle(server))"
+              >{{ formatServerBillingCycle(server) }}</span>
+            </td>
+            <td><span class="date-text">{{ server.expire_date || '-' }}</span></td>
+            <td>
+              <span
+                class="spec-text"
+                :class="{ 'spec-copied': isSpecCopied(server, 'auto_renewal') }"
+                @dblclick.stop="emitCopySpec(server, 'auto_renewal', isServerAutoRenewal(server) ? trans.enabled : trans.disabled)"
+              >{{ isServerAutoRenewal(server) ? trans.enabled : trans.disabled }}</span>
+            </td>
+            <td>
+              <span
+                class="spec-text"
+                :class="{ 'spec-copied': isSpecCopied(server, 'traffic_limit') }"
+                @dblclick.stop="emitCopySpec(server, 'traffic_limit', server.traffic_limit ? formatBytes(server.traffic_limit * 1024 * 1024 * 1024) : '')"
+              >{{ server.traffic_limit ? formatBytes(server.traffic_limit * 1024 * 1024 * 1024) : '-' }}</span>
+            </td>
+            <td>
+              <span
+                class="spec-text"
+                :class="[getAgentVersionClass(server.agent_version), { 'spec-copied': isSpecCopied(server, 'agent_version') }]"
+                @dblclick.stop="emitCopySpec(server, 'agent_version', server.agent_version)"
               >{{ server.agent_version || '●' }}</span>
             </td>
             <td>
@@ -119,7 +161,7 @@
 import { getFlagRegionCode, formatBytes } from '../../../utils/api'
 import { getPublicAssetUrl } from '../../../utils/config'
 import { currentLang } from '../../../utils/i18n'
-import { detectBillingCycle, detectCurrencySymbol, getBillingCycleOption, isEnabledFlag, isFreePrice, normalizeCurrency, normalizePrice } from '../../../../utils/serverBilling.js'
+import { detectBillingCycle, detectCurrencySymbol, getBillingCycleOption, isEnabledFlag, isFreePrice, normalizeCurrency, normalizePrice } from '../../../utils/server.js'
 import OsIcon from '../../../components/OsIcon.vue'
 
 const props = defineProps({
@@ -129,19 +171,32 @@ const props = defineProps({
   groups: { type: Array, default: () => ['Default'] },
   activeTab: { type: String, default: 'servers' },
   selectedApiIndex: { type: Number, default: 0 },
+  themeUrl: { type: String, default: '' },
   latestAgentVersion: { type: String, default: '' },
   copiedServerId: { type: [String, Number], default: null },
-  copiedNoteServerId: { type: [String, Number], default: null }
+  copiedNoteServerId: { type: [String, Number], default: null },
+  copiedSpecKey: { type: String, default: null }
 })
 
 const newServerName = defineModel('newServerName', { type: String, default: '' })
 const newServerGroup = defineModel('newServerGroup', { type: String, default: '' })
 
-defineEmits([
+const emit = defineEmits([
   'add-server', 'batch-delete', 'toggle-select-all', 'select-all',
   'drag-start', 'drop', 'toggle-server', 'copy-note',
-  'copy-cmd', 'edit', 'delete'
+  'copy-spec', 'copy-cmd', 'edit', 'delete'
 ])
+
+const getSpecCopyKey = (server, field) => `${server.id}:${field}`
+const isSpecCopied = (server, field) => props.copiedSpecKey === getSpecCopyKey(server, field)
+const emitCopySpec = (server, field, value) => {
+  const text = String(value || '').trim()
+  if (!text || text === '-') return
+  emit('copy-spec', {
+    key: getSpecCopyKey(server, field),
+    text
+  })
+}
 
 const splitTags = (value) => String(value || '')
   .split(',')
@@ -171,4 +226,7 @@ const getAgentVersionClass = (version) => {
   if (!latest) return ''
   return normalizeVersion(version) === latest ? 'text-green' : 'text-red'
 }
+const getServerQuery = () => props.selectedApiIndex ? `?apiIndex=${props.selectedApiIndex}` : ''
+const getDefaultServerRoute = (server) => `/server/${server.id}${getServerQuery()}`
+const getPublicServerHref = (server) => `/#/server/${encodeURIComponent(server.id)}${getServerQuery()}`
 </script>

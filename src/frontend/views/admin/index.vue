@@ -108,9 +108,11 @@
           :groups="groups"
           :active-tab="activeTab"
           :selected-api-index="selectedApiIndex"
+          :theme-url="settings.theme_url"
           :latest-agent-version="latestAgentVersion"
           :copied-server-id="copiedServerId"
           :copied-note-server-id="copiedNoteServerId"
+          :copied-spec-key="copiedSpecKey"
           @add-server="addServer"
           @batch-delete="batchDelete"
           @toggle-select-all="toggleSelectAll"
@@ -119,6 +121,7 @@
           @drop="handleDrop"
           @toggle-server="toggleServer"
           @copy-note="copyServerNote"
+          @copy-spec="copyServerSpec"
           @copy-cmd="copyCmd"
           @edit="openEditModal"
           @delete="openDeleteModal"
@@ -140,6 +143,7 @@
           @toggle-admin-password-change="toggleAdminPasswordChange"
           @save-settings="saveSettings"
           @upload-bg="uploadBg"
+          @upload-favicon="uploadFavicon"
           @send-test-notification="sendTestNotification"
           @query-d1-usage="queryD1Usage"
         />
@@ -155,6 +159,9 @@
         <ThemeStorePanel
           :trans="trans"
           :active-tab="activeTab"
+          :selected-api-index="selectedApiIndex"
+          :current-theme-url="settings.theme_url"
+          @theme-applied="settings.theme_url = $event"
         />
       </div>
 
@@ -463,7 +470,7 @@ import { PING_NODE_FIELDS, validatePingNode } from '../../utils/pingNode.js'
 import { normalizeDisplayMode, resolveDisplayMode } from '../../utils/displayMode.js'
 import { usePasswordVisibility } from '../../composables/usePasswordVisibility'
 import { useTurnstile } from './composables/useTurnstile'
-import { detectBillingCycle, detectCurrencySymbol, normalizeBillingCycle, normalizeCurrency, normalizePrice, renewExpireDateIfNeeded } from '../../../utils/serverBilling.js'
+import { detectBillingCycle, detectCurrencySymbol, normalizeBillingCycle, normalizeCurrency, normalizePrice, renewExpireDateIfNeeded } from '../../utils/server.js'
 
 const trans = useTranslation()
 const route = useRoute()
@@ -490,6 +497,20 @@ const normalizeTgNotifySetting = (value) => {
 }
 
 const isTgNotifyEnabled = (value) => normalizeTgNotifySetting(value) !== '0'
+
+const normalizeExpireReminderSetting = (value) => {
+  if (value === true || value === 'true') return '7'
+  if (value === false || value === 'false' || value === undefined || value === null || value === '') return '0'
+
+  const days = Number(value)
+  if (Number.isInteger(days) && days >= 0 && days <= 7) {
+    return String(days)
+  }
+
+  return '0'
+}
+
+const isExpireReminderEnabled = (value) => normalizeExpireReminderSetting(value) !== '0'
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -564,6 +585,7 @@ const newServerGroup = ref('')
 const settings = ref({
   site_title: '',
   custom_bg: '',
+  favicon: '',
   custom_head: '',
   custom_script: '',
   display_mode: 'bar',
@@ -575,7 +597,7 @@ const settings = ref({
   show_time: true,
   show_long_history: false,
   tg_notify: '0',
-  expire_reminder: 'false',
+  expire_reminder: '0',
   tg_bot_token: '',
   tg_chat_id: '',
   turnstile_enabled: false,
@@ -591,6 +613,7 @@ const settings = ref({
   custom_cu: '',
   custom_cm: '',
   custom_bd: '',
+  theme_url: '',
   csp_static: '',
   csp_api: ''
 })
@@ -625,6 +648,7 @@ const editForm = ref({
   id: '',
   name: '',
   server_group: '',
+  region: '',
   tags: '',
   note: '',
   price: '',
@@ -653,6 +677,7 @@ const deleteServerId = ref('')
 
 const copiedServerId = ref(null)
 const copiedNoteServerId = ref(null)
+const copiedSpecKey = ref(null)
 const deleteTargetOs = ref('linux')
 const uninstallCopied = ref(false)
 const saving = ref(false)
@@ -750,6 +775,23 @@ const copyServerNote = async (server) => {
   }
 }
 
+const copyServerSpec = async ({ key, text } = {}) => {
+  const value = String(text || '').trim()
+  if (!key || !value || value === '-') return
+
+  try {
+    await copyTextToClipboard(value)
+    copiedSpecKey.value = key
+    setTimeout(() => {
+      if (copiedSpecKey.value === key) {
+        copiedSpecKey.value = null
+      }
+    }, 1500)
+  } catch (e) {
+    console.error('[ERROR] Copy spec failed:', e)
+  }
+}
+
 const handleLogin = async () => {
   loginError.value = ''
   loginLoading.value = true
@@ -787,6 +829,10 @@ const handleLogin = async () => {
 }
 
 const logout = async () => {
+  try {
+    await adminApiForSite({ action: 'clear_theme_preview_auth' })
+  } catch (_) {
+  }
   apiLogout()
   isLoggedIn.value = false
   latestAgentVersion.value = ''
@@ -880,6 +926,7 @@ const loadSettings = async () => {
       settings.value = {
         site_title: settingsData.site_title || '',
         custom_bg: settingsData.custom_bg || '',
+        favicon: settingsData.favicon || '',
         custom_head: settingsData.custom_head || '',
         custom_script: settingsData.custom_script || '',
         display_mode: resolveDisplayMode(settingsData),
@@ -891,7 +938,7 @@ const loadSettings = async () => {
         show_time: settingsData.show_time === 'true',
         show_long_history: settingsData.show_long_history === 'true',
         tg_notify: normalizeTgNotifySetting(settingsData.tg_notify),
-        expire_reminder: settingsData.expire_reminder || 'false',
+        expire_reminder: normalizeExpireReminderSetting(settingsData.expire_reminder),
         tg_bot_token: settingsData.tg_bot_token || '',
         tg_chat_id: settingsData.tg_chat_id || '',
         turnstile_enabled: settingsData.turnstile_enabled === 'true',
@@ -908,6 +955,7 @@ const loadSettings = async () => {
         custom_cu: settingsData.custom_cu || '',
         custom_cm: settingsData.custom_cm || '',
         custom_bd: settingsData.custom_bd || '',
+        theme_url: settingsData.theme_url || '',
         csp_static: settingsData.csp_static || '',
         csp_api: settingsData.csp_api || ''
       }
@@ -963,7 +1011,7 @@ const saveSettings = async () => {
     }
   }
 
-  if (isTgNotifyEnabled(settings.value.tg_notify) || settings.value.expire_reminder === 'true') {
+  if (isTgNotifyEnabled(settings.value.tg_notify) || isExpireReminderEnabled(settings.value.expire_reminder)) {
     if (!settings.value.tg_bot_token || settings.value.tg_bot_token.trim().length === 0) {
       validationError.value = trans.value.tgBotTokenRequired
       return
@@ -998,6 +1046,7 @@ const saveSettings = async () => {
     settings: {
       site_title: settings.value.site_title,
       custom_bg: settings.value.custom_bg,
+      favicon: settings.value.favicon,
       custom_head: settings.value.custom_head,
       custom_script: settings.value.custom_script,
       display_mode: normalizeDisplayMode(settings.value.display_mode),
@@ -1011,7 +1060,7 @@ const saveSettings = async () => {
       show_time: settings.value.show_time ? 'true' : 'false',
       show_long_history: settings.value.show_long_history ? 'true' : 'false',
       tg_notify: normalizeTgNotifySetting(settings.value.tg_notify),
-      expire_reminder: settings.value.expire_reminder,
+      expire_reminder: normalizeExpireReminderSetting(settings.value.expire_reminder),
       tg_bot_token: settings.value.tg_bot_token,
       tg_chat_id: settings.value.tg_chat_id,
       turnstile_enabled: settings.value.turnstile_enabled ? 'true' : 'false',
@@ -1226,6 +1275,7 @@ const openEditModal = (server) => {
     id: server.id,
     name: server.name || '',
     server_group: server.server_group || '',
+    region: server.region_override ?? (server.region || ''),
     tags: server.tags || '',
     note: server.note || '',
     price: normalizePrice(server.price),
@@ -1309,6 +1359,7 @@ const saveEdit = async () => {
     id: editForm.value.id,
     name: editForm.value.name,
     server_group: editForm.value.server_group,
+    region: editForm.value.region,
     tags: editForm.value.tags,
     note: editForm.value.note,
     price: normalizedPrice,
@@ -1449,7 +1500,7 @@ const handleDrop = async (e, targetId) => {
   draggedRow = null
 }
 
-const uploadBg = (e) => {
+const uploadImageSetting = (e, field) => {
   const file = e.target.files[0]
   if (!file) return
   if (file.size > 800 * 1024) {
@@ -1458,10 +1509,14 @@ const uploadBg = (e) => {
   }
   const reader = new FileReader()
   reader.onload = function(event) {
-    settings.value.custom_bg = event.target.result
+    settings.value[field] = event.target.result
   }
   reader.readAsDataURL(file)
 }
+
+const uploadBg = (e) => uploadImageSetting(e, 'custom_bg')
+
+const uploadFavicon = (e) => uploadImageSetting(e, 'favicon')
 
 const handleUpgradeDatabase = async () => {
   dbOperation.value = 'upgrade'
