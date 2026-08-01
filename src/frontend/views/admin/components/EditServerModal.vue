@@ -26,8 +26,8 @@
         </div>
 
         <div class="form-group flex-1">
-          <label class="form-label">{{ trans.region }}</label>
-          <input type="text" name="edit_region" autocomplete="off" v-model.trim="editForm.region" class="form-input" placeholder="e.g. HK">
+          <label class="form-label">{{ trans.region }} CN/US/GB</label>
+          <input type="text" name="edit_region" autocomplete="off" v-model.trim="editForm.region" class="form-input" :placeholder="trans.regionPlaceholder">
         </div>
       </div>
 
@@ -119,6 +119,10 @@
             <option :value="180">180</option>
           </select>
         </div>
+        <div class="form-group flex-1">
+          <label class="form-label">{{ trans.networkInterface }}</label>
+          <input type="text" name="edit_interface" autocomplete="off" v-model.trim="editForm.interface" class="form-input" :placeholder="trans.networkInterfacePlaceholder">
+        </div>
       </div>
 
       <div class="text-muted text-sm mb-3">
@@ -183,7 +187,7 @@
           </div>
         </div>
 
-        <div v-if="isOfflineNotifyEnabled && settings.tg_bot_token" class="form-group">
+        <div v-if="hasNodeNotificationOptions" class="form-group">
           <div class="checkbox-item no-margin">
             <input type="checkbox" v-model="editForm.offline_notify_disabled">
             <label>
@@ -250,6 +254,10 @@ const normalizeTgNotifySetting = (value) => {
 }
 
 const isOfflineNotifyEnabled = computed(() => normalizeTgNotifySetting(props.settings.tg_notify) !== '0')
+const hasNodeNotificationOptions = computed(() => (
+  !!props.settings.tg_bot_token &&
+  isOfflineNotifyEnabled.value
+))
 
 const normalizePriceInput = () => {
   editForm.value.price = normalizePrice(editForm.value.price)

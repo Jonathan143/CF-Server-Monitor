@@ -1,12 +1,12 @@
 import { initDatabase, weeklyCleanup, getMetricsHistory, clearHistory } from './database/schema.js';
-import { checkOfflineNodes, checkExpiringServers } from './services/notification.js';
+import { checkOfflineNodes, checkExpiringServers, checkResourceAlerts } from './services/notification.js';
 import { updateDatabase } from './database/updateDatabase.js';
 import { handleAdminAPI } from './handlers/admin.js';
 import { serveFrontend } from './handlers/frontend.js';
 import { handleUpdate, handleWebSocketUpgrade } from './handlers/update.js';
 import { handleServerAPI, handleServersAPI } from './handlers/dashboard.js';
 import { handleTheme } from './handlers/theme.js';
-import { loadSettings, loadSiteSettings, loadAppearanceOptions, setDebug, debug, getCurrentVersion } from './utils/settings.js';
+import { loadSettings, loadSiteSettings, loadAppearanceOptions, normalizeLongHistoryPoints, setDebug, debug, getCurrentVersion } from './utils/settings.js';
 import { checkAuth, simpleAuthResponse } from './middleware/auth.js';
 import { getServerDetail, getMetricsHistoryCache, setMetricsHistoryCache, getCacheDuration } from './utils/cache.js';
 import { AppError, createSuccessResponse, createUnauthorizedResponse, createBadRequestResponse, createNotFoundResponse, createErrorResponse } from './utils/errors.js';
@@ -24,8 +24,25 @@ async function fetchStaticAsset(request, env, path) {
   if (!env.ASSETS || request.method !== 'GET') return null;
 
   try {
-    const res = await env.ASSETS.fetch(new Request(`http://static${path}`, request));
-    return res.ok ? res : null;
+    const res = await env.ASSETS.fetch(
+      new Request(`http://static${path}`, request)
+    );
+
+    if (!res.ok) return null;
+
+    const headers = new Headers(res.headers);
+
+    headers.set(
+      'Cache-Control',
+      'public, max-age=31536000, immutable'
+    );
+
+    return new Response(res.body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers
+    });
+
   } catch (_) {
     return null;
   }
@@ -134,7 +151,7 @@ async function fetchHistoryData(env, request, id, hours, columns, sys = null) {
     return simpleAuthResponse();
   }
   
-  if (hours > 1 && !isLoggedIn) {
+  if (hours > 24 && !isLoggedIn) {
     return createUnauthorizedResponse();
   }
   
@@ -144,15 +161,25 @@ async function fetchHistoryData(env, request, id, hours, columns, sys = null) {
   // 最多查询7天数据
   const clampedHours = Math.min(hours, 168);
   const cacheDuration = getCacheDuration(clampedHours);
+  const longHistoryPoints = clampedHours > 1
+    ? Number(normalizeLongHistoryPoints(sys.long_history_points))
+    : null;
 
-  const cached = getMetricsHistoryCache(id, clampedHours, columns);
+  const cached = getMetricsHistoryCache(id, clampedHours, columns, longHistoryPoints);
   if (cached && Date.now() - cached.timestamp < cacheDuration) {
     return createSuccessResponse(cached.data, { 'X-Cache': 'HIT' });
   }
   
   let data;
   try {
-    data = await getMetricsHistory(env.DB, id, clampedHours, columns, server);
+    data = await getMetricsHistory(
+      env.DB,
+      id,
+      clampedHours,
+      columns,
+      server,
+      longHistoryPoints
+    );
   } catch (e) {
     const message = e && e.message ? e.message : String(e);
     if (/no such column/i.test(message)) {
@@ -167,7 +194,7 @@ async function fetchHistoryData(env, request, id, hours, columns, sys = null) {
     throw e;
   }
   
-  setMetricsHistoryCache(id, clampedHours, columns, data);
+  setMetricsHistoryCache(id, clampedHours, columns, data, longHistoryPoints);
   
   return createSuccessResponse(data, { 'X-Cache': 'MISS' });
 }
@@ -332,7 +359,7 @@ export default {
           theme_options: appearanceOptions.theme_options || {},
           verified: verified,
           turnstile_verified: turnstileVerified,
-          show_long_history: sys.show_long_history === 'true'
+          long_history_points: Number(normalizeLongHistoryPoints(sys.long_history_points))
         });
       }},
       { method: 'GET', path: '/theme', handler: async () => {
@@ -430,6 +457,9 @@ export default {
         debug('[Cron] 开始执行离线节点检测');
         await checkOfflineNodes(env.DB);
         debug('[Cron] 离线节点检测完成');
+        debug('[Cron] 开始执行资源负载告警检测');
+        await checkResourceAlerts(env);
+        debug('[Cron] 资源负载告警检测完成');
       }
     } else if (cron === '0 * * * *') {
       if (day === 0 && hour === 0) {

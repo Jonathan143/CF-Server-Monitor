@@ -4,7 +4,7 @@
 
 **演示地址**：<https://demo.huilang.me/>
 
-**当前Workers版本：V2.8.0 Beta1; Agent版本：1.3.4**
+**当前Workers版本：V2.8.1 Beta3; Agent版本：1.3.8**
 
 > [!IMPORTANT]
 > V2.7.10 加入了 CSP 内容安全策略。Workers 环境通过 HTTP Response Header 下发 CSP，默认只允许同源资源和必要的 Cloudflare/Google Fonts 资源；
@@ -23,13 +23,23 @@
 
 <details>
 <summary>更新记录</summary>
+
+## Workers 版本更新
+
+- V2.8.1 优化长时间历史查询的 D1 读行，增加服务器负载通知，优化主题商店接口。主题新增服务器价值统计面板。
 - V2.8.0 新增主题商店功能，支持一键切换主题。
-- 探针V1.3.4添加缓存机制减少资源消耗,新增内核版本指标字段
 - V2.7 版本进行了全面重构与功能增强：数据库层面将每日清理改为每月表轮换，减少 D1 消耗，同时优化数据结构使写入减半并支持 60+ 服务器监控；新增国内四线路丢包率监控及历史图表、GPU 字段展示、服务器到期提醒、多分区磁盘统计、计费与自动续费、tags/note 字段、iOS Scriptable 小组件等功能；通知层面新增钉钉、OneBot(QQ)、飞书、Bark 支持，并重构告警模块；交互层面新增环形图显示模式、服务器导入导出、批量推送（5秒/批）、服务器参数下发，优化 Ping 统计改为中位数；安全与兼容方面加入 CSP、JWT 自动生成、跨域配置、多站点验证码登录、macOS 修复，并简化安装流程；探针与运维方面优化客户端脚本减少流量消耗，新增 Agent 自动更新（默认关闭）、GitHub 自动同步及 Workers/Agent 版本升级提示，增加 OS 图标显示，压缩定时任务从 4 个减为 2 个以规避免费额度限制，并修复月度任务导致索引丢失等严重 Bug。
 - V2.6 版本重点优化了性能与流量统计体系：将 D1 写入消耗降低 50%，新增月流量统计功能（需后台手动升级数据库并设置重置日期）及月流量校正、首页流量展示；交互层面新增自定义 Ping 设置、上报间隔配置、详情页实时网速展示，并修复启动时间获取错误、TCP/UDP 上报格式问题、网卡流量误统计及 Alpine 环境 UDP 连接数统计错误；部署兼容性方面重构 OpenWrt 安装脚本并新增 OpenRC 服务支持，同时修复方式一部署同步后丢失 API_SECRET 的问题及地图显示异常。部分修复需重新安装脚本生效，2.6.4/2.6.0 升级后务必手动升级数据库结构。
 - V2.5.0 增加客户端上报数据后，在不占用D1消耗的情况下，前端WebSocket实时刷新数据
 - V2.4.0 版本主要优化了D1读写占用，使项目消耗大大降低，以及增加了防护避免被刷。
 
+
+## Agent 版本更新
+- V1.3.8 修复 8/9 月账期计算中前导零导致的 Shell 八进制解析错误
+- V1.3.7 添加双栈IP获取
+- V1.3.6 添加指定网卡选项，支持指定一个或多个网卡统计网速和月流量，留空保持。优化硬盘统计逻辑。
+- V1.3.5 各安装脚本新增采样数据中间变量，拆分完整指标和基础采样字段；新增服务器级 `interface` 参数，支持指定一个或多个网卡统计网速和月流量，留空保持自动汇总
+- V1.3.4 添加缓存机制减少资源消耗,新增内核版本指标字段
 </details>
 
 ## ✨ 功能特点
@@ -50,7 +60,7 @@
 - 🔑 **JWT 认证**：登录系统采用 JWT token 认证，支持自定义密钥
 - 🛡️ **CSP 安全策略**：默认限制第三方静态资源加载，可在后台按需添加可信白名单
 - 🎨 **主题商店**：后台可选择第三方主题和版本，Workers 仅反代主题 `index.html` 与 `assets/`
-- 📉 **额度查询**：后台可查询 Cloudflare D1 当日读写行数与 Workers 请求量
+- 📉 **额度查询**：后台可查询 Cloudflare D1 与 Workers 当日/昨天用量
 - ⚡ **实时推送**：基于 Durable Objects + WebSocket，探针上报后页面立即刷新，无轮询延迟
 
 ## 🚀 快速开始
@@ -373,6 +383,7 @@ Workers 环境下 CSP 会放在 HTTP Response Header 中返回，并同时设置
 
 **默认 `connect-src` 白名单**（已内置）：
 
+- `https://api.github.com`
 - `https://api.iconify.design`
 - `https://api.unisvg.com`
 - `https://api.simplesvg.com`
@@ -416,12 +427,12 @@ Workers 环境下 CSP 会放在 HTTP Response Header 中返回，并同时设置
 
 ### Cloudflare 额度查询（可选）
 
-如需在后台查询 D1 当日读写额度和 Workers 请求量：
+如需在后台查询 D1 读写额度和 Workers 请求量：
 
 1. 在 [Cloudflare Dashboard](https://dash.cloudflare.com/?to=/:account/workers-and-pages)右下角复制当前账户的 **Account ID**
 2. 在[API Tokens 页面](https://dash.cloudflare.com/profile/api-tokens)创建具备 **Account Analytics Read** 权限的 Cloudflare API Token
 3. 在管理后台 → 全局设置 → Cloudflare 设置中填入 Account ID 和 API Token
-4. 保存后点击 **查询 D1 额度** 查看 UTC 当日用量与下次重置时间
+4. 保存后点击 **查询 D1 额度** 查看 UTC 当日与昨天用量
 
 </details>
 
@@ -557,12 +568,12 @@ Workers 环境下 CSP 会放在 HTTP Response Header 中返回，并同时设置
 
 **主题商店与 Workers 反代说明**：
 
-- 后台切换主题会保存 `theme_url`，支持主题商店地址 `https://github.com/huilang-me/CFSM-Theme-Store/tree/dist/<作者>/<主题目录>/<版本号>`，也支持手动填写独立 GitHub 主题仓库 tree 地址，例如 `https://github.com/huilang-me/cf-server-monitor-theme-emerald/tree/f334bb5e25ffbe66749a8df9eb4b099fb148e0f7`
-- 主题商店 `themes.json` 可为主题配置仓库 `url` 和构建分支 `branch`；后台会读取该分支最近 10 个 commit，并把所选 commit 组装为 `https://github.com/<owner>/<repo>/tree/<commit_id>` 写入 `theme_url`
+- 后台切换主题会保存 `theme_url`，主题商店会基于主题仓库 commit 生成 GitHub tree 地址，也支持手动填写独立 GitHub 主题仓库 tree 地址，例如 `https://github.com/huilang-me/cf-server-monitor-theme-emerald/tree/f334bb5e25ffbe66749a8df9eb4b099fb148e0f7`
+- 主题商店 `themes.json` 可为主题配置仓库 `url` 和构建分支 `branch`；后台会读取该分支最近 10 个 commit，并把所选 commit 组装为 `https://github.com/<owner>/<repo>/tree/<commit ID>` 写入 `theme_url`
 - `theme_url` 留空时使用项目内置默认主题
 - Workers 仅反代所选主题的 `index.html` 和 `/assets/*`，例如 `/assets/app.css` 会映射到主题仓库同版本 `assets/app.css`
 - `install.sh`、`flags/`、`os-icons/`、favicon、API、管理端等其他路径不会走主题反代，仍返回项目原有文件或接口
-- 远程主题 `index.html` 和 `assets/` 会在 Workers Cache 中缓存 1 小时；主题商店列表缓存 5 分钟
+- 远程主题 `index.html` 和 `assets/` 会在 Workers Cache 中缓存：commit id 固定版 1 天，分支名版本 1 小时；主题商店列表缓存 5 分钟
 - 切换主题会先校验远程 `index.html` 是否可访问，失败会提示错误并拒绝保存，不会自动回退成默认主题
 - 主题预览需要已登录管理员身份；未授权直接访问 `/?theme_url=...` 会返回 401，不会启用临时主题
 - 管理后台固定使用内置默认主题；第三方主题的管理入口应链接到 `/admin#admin`
