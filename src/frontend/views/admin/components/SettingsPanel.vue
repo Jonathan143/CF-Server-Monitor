@@ -49,7 +49,7 @@
         <div class="form-row">
           <div class="form-group flex-1">
             <label class="form-label">{{ trans.themeOptions }}</label>
-            <textarea v-model="settings.theme_options" class="form-textarea" rows="5" placeholder='{"a":1,"b":2}'></textarea>
+            <textarea v-model="settings.theme_options" class="form-textarea" rows="5" placeholder='{"mikus":1}'></textarea>
             <p class="text-muted text-sm mt-1">{{ trans.themeOptionsTip }}</p>
           </div>
         </div>

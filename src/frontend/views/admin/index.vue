@@ -162,7 +162,9 @@
           :active-tab="activeTab"
           :selected-api-index="selectedApiIndex"
           :current-theme-url="settings.theme_url"
+          :settings="settings"
           @theme-applied="settings.theme_url = $event"
+          @theme-options-applied="handleThemeOptionsApplied"
         />
       </div>
 
@@ -470,6 +472,7 @@ import { hasMultipleApiBases } from '../../utils/config.js'
 import { t, useTranslation } from '../../utils/i18n'
 import { PING_NODE_FIELDS, validatePingNode } from '../../utils/pingNode.js'
 import { normalizeDisplayMode, resolveDisplayMode } from '../../utils/displayMode.js'
+import { applyMikusThemeOptions } from '../../utils/themeOptions.js'
 import { HISTORY } from '../../utils/constants.js'
 import { usePasswordVisibility } from '../../composables/usePasswordVisibility'
 import { useTurnstile } from './composables/useTurnstile'
@@ -1048,12 +1051,18 @@ const loadSettings = async () => {
         csp_static: settingsData.csp_static || '',
         csp_api: settingsData.csp_api || ''
       }
+      applyMikusThemeOptions(settingsData.theme_options)
       changeAdminPassword.value = !String(settings.value.username || '').trim()
       apiSecret.value = data.api_secret || ''
     }
   } catch (e) {
     console.error('[ERROR] Load settings failed:', e)
   }
+}
+
+const handleThemeOptionsApplied = (themeOptions) => {
+  settings.value.theme_options = formatThemeOptions(themeOptions)
+  applyMikusThemeOptions(themeOptions)
 }
 
 watch(
@@ -1190,6 +1199,7 @@ const saveSettings = async () => {
     const result = await adminApiForSite(data)
     if (!result.error) {
       saveResult.value = { success: true }
+      applyMikusThemeOptions(themeOptionsResult.value)
       clearAdminPasswordInputs()
       changeAdminPassword.value = false
       settings.value.jwt_secret = ''
