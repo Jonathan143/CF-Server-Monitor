@@ -10,8 +10,7 @@
   <a href="README-en.md">English</a>
 </p>
 
-[![Workers](https://img.shields.io/badge/Workers-2.8.4%20Beta2-f38020?style=flat-square&logo=cloudflare&logoColor=white)](version.json)
-[![Agent](https://img.shields.io/badge/Agent-1.0.3-2563eb?style=flat-square)](https://github.com/huilang-me/cfsm-agent)
+[![Workers](https://img.shields.io/badge/Workers-2.8.4%20Beta8-f38020?style=flat-square&logo=cloudflare&logoColor=white)](version.json)
 [![GitHub Stars](https://img.shields.io/github/stars/huilang-me/CF-Server-Monitor?style=flat-square&logo=github)](https://github.com/huilang-me/CF-Server-Monitor/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/huilang-me/CF-Server-Monitor?style=flat-square&logo=github)](https://github.com/huilang-me/CF-Server-Monitor/forks)
 [![License](https://img.shields.io/badge/License-MIT-16a34a?style=flat-square)](#许可证)
@@ -65,7 +64,7 @@ CF-Server-Monitor 是一个部署在 Cloudflare Workers 上的服务器监控系
 | --------- | -------------------------------------------------------------------------------- |
 | 实时监控      | CPU、GPU、内存、交换分区、磁盘、磁盘 IO、网络、连接数、进程数、负载、运行时间                                      |
 | 历史数据      | 7 天历史图表、长时段采样、实时网速、月流量统计与校正                                                      |
-| 网络质量      | 电信、联通、移动、BGP/字节节点延迟与丢包率追踪                                                        |
+| 网络质量      | 电信、联通、移动、BGP 节点延迟与丢包率追踪；三网详情开启时首页从 D1 最近 1 小时抽样最多 20 个真实点并缓存 2 分钟 |
 | 多视图前台     | 条形图、环形图、表格、地图视图，支持桌面端和移动端                                                        |
 | 管理后台      | 服务器增删改查、拖拽排序、隐藏服务器、导入导出、批量删除、数据库维护                                               |
 | 多系统 Agent | 主流 Linux、Alpine Linux、OpenWrt、群晖 DSM、飞牛 fnOS、FreeBSD、macOS、Windows；默认 Go 版本，保留 Shell/PowerShell 版本 |
@@ -98,7 +97,7 @@ flowchart LR
 
 近期变化：
 
-- `2.8.4`：新增 Agent WSS 上报通道，提升实时数据推送及时性；新增 D1 / Workers / Durable Objects 账户用量展示，优化无前端订阅时的 Durable Object 实时广播请求，降低空闲额度消耗。
+- `2.8.4`：新增 Agent WSS 上报和 WSS 开启时段，提升实时数据推送及时性，并允许非目标时段自动改用 POST 降低 Do 时长消耗；该能力要求 Agent 升级到 `v1.0.10+`。新增账户Do用量展示，优化无前端订阅时的 Do 实时广播请求，降低空闲额度消耗。通知设置新增自定义 Webhook 渠道, 新增前端wss超时配置。
 - `2.8.3`：新增磁盘 IO 统计，默认 Agent 切换为 Go 版本，新增服务器延迟与丢包率实时窗口。
 - `2.8.2`：引入 Go Agent 支持。
 - `2.8.1`：优化长时间历史查询 D1 读行，增加资源负载通知和主题商店接口优化。
@@ -255,7 +254,7 @@ npm run build:github-page
 
 | 分类            | 主要内容                                  |
 | ------------- | ------------------------------------- |
-| 站点设置          | 标题、背景、favicon、默认展示模式、公开访问策略           |
+| 站点设置          | 标题、背景、favicon、默认展示模式、三网详情、公开访问策略       |
 | 服务器参数         | HTTP/WSS 上报间隔、采集间隔、Ping 节点、网卡、月流量、价格、到期时间、自动续费 |
 | 安全设置          | 管理员账号密码、JWT Secret、Turnstile          |
 | 通知设置          | 离线告警、到期提醒、资源负载告警、测试通知                 |
@@ -279,7 +278,11 @@ npm run build:github-page
 
 ## 通知与告警
 
-在管理后台 -> 全局设置 -> 通知 中配置。项目通过 Bot Token 内容自动识别平台。
+在管理后台 -> 全局设置 -> 通知 中配置。通知分为“内置渠道”和“自定义 Webhook”两种渠道；选择自定义 Webhook 后，后端只会发送 Webhook，不会再调用内置渠道。
+
+### 内置渠道
+
+内置渠道通过 Bot Token 内容自动识别平台。
 
 | 平台          | Bot Token 填写方式                                                   | Chat ID     |
 | ----------- | ---------------------------------------------------------------- | ----------- |
@@ -293,10 +296,51 @@ npm run build:github-page
 | WxPusher    | `https://wxpusher.zjiecode.com/api/send/message/[SPT_xxx]/Hello` | 留空          |
 | Gotify      | `https://gotify.example.com/message?token=xxx`                   | 留空          |
 
+### 自定义 Webhook
+
+自定义 Webhook 支持 `GET` 和 `POST`：
+
+- `POST`：可选择 `JSON`、`x-www-form-urlencoded` 或 `Text`。默认 JSON 请求体为 `title` 和 `content` 两个参数。
+- `GET`：使用同一个参数配置追加到 URL query；参数可写 JSON 对象，也可写 `title={{emoji}} {{event}}&content={{notification}}` 这种 QueryString。
+- 请求头支持 JSON 对象或 `Header: value` 多行文本。
+- 发送测试通知会按当前通知模板渲染后发送，适合保存前验证平台格式。
+
+默认 Webhook 参数：
+
+```json
+{
+  "title": "{{emoji}} {{event}}",
+  "content": "{{notification}}"
+}
+```
+
+默认通知模板：
+
+```text
+{{emoji}}【CF Server Monitor】{{event}}
+
+{{message}}
+
+{{time}}
+```
+
+可用模板变量：
+
+| 变量 | 说明 |
+| --- | --- |
+| `{{emoji}}` | 事件图标：恢复/测试为 `✅`，离线/告警为 `❌`，到期/混合状态为 `⚠️` |
+| `{{event}}` | 事件名称，例如“节点离线告警”“资源负载恢复” |
+| `{{client}}` / `{{clients}}` | 本次通知涉及的服务器名称，多个服务器用逗号连接 |
+| `{{count}}` | 本次通知涉及的服务器数量；默认模板不显示，但可自定义加入 |
+| `{{message}}` | 通知详情列表 |
+| `{{time}}` | 按通知时区格式化的发送时间 |
+| `{{notification}}` | 应用通知模板后的完整内容，通常用于 Webhook 的 `content` |
+| `{{title}}` | 固定标题 `💌 Cloudflare Server Monitor` |
+
 支持的告警类型：
 
 - 离线告警：节点离线达到设定阈值后通知，恢复后发送恢复通知。
-- 到期提醒：服务器到期前 1 到 7 天内每天提醒，也可关闭。
+- 到期提醒：服务器到期前 1 到 7 天内，按通知时区和到期通知时间每天提醒，也可关闭。
 - 资源负载告警：按 CPU、内存、磁盘、上下行速率等指标配置规则。
 
 配置后请先点击发送测试通知，再保存配置。
@@ -316,6 +360,7 @@ npm run build:github-page
 - `/api/ws` 支持三种 JWT 认证来源：`Authorization: Bearer <token>`、`Cookie: cfsm_auth=<token>`、查询参数 `token` / `auth_token` / `ws_token`。
 - 浏览器原生 WebSocket 不能自定义 `Authorization` Header，内置前端同域连接走 `cfsm_auth` Cookie，跨域连接才在 URL 中追加 `token=<jwt>` 查询参数。
 - 查询参数 token 可能出现在访问日志中，请只通过 HTTPS 使用，并避免把带 token 的 WebSocket URL 分享给他人。
+- 后台可配置“前端 WSS 超时（分钟）”：默认 `0`，表示不因连接时长主动断开；设为正整数后，内置前端到时会断开实时订阅并弹窗让用户选择关闭或继续。
 
 ### Turnstile
 
@@ -416,8 +461,8 @@ Go 版本和旧 Shell / PowerShell 版本卸载脚本只清理各自安装的服
 
 | Cron          | 说明                         |
 | ------------- | -------------------------- |
-| `*/1 * * * *` | 每分钟检测离线节点并发送告警             |
-| `0 * * * *`   | 每小时执行合并任务，包括月表轮换、旧表清理、到期检测 |
+| `*/1 * * * *` | 每分钟检测离线节点、资源告警 |
+| `0 * * * *`   | 每小时执行合并任务，包括月表轮换、旧表清理，并按通知时区/到期通知小时执行到期检测 |
 
 ## 本地开发
 
